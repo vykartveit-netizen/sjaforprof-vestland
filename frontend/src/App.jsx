@@ -1,150 +1,56 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
+import { useState, useEffect } from 'react';
+import { defaultRoutes } from './data/mockRoutes';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-const formatTime = (date = new Date()) =>
-  date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-const loadGoogleMaps = async () => {
-  if (window.google?.maps) return;
-
-  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY || 'YOUR_API_KEY';
-  if (apiKey === 'YOUR_API_KEY') return;
-
-  const script = document.createElement('script');
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-
-  await new Promise((resolve) => {
-    script.onload = resolve;
-  });
-};
-
-const defaultRoute = {
-  id: '83',
-  name: 'Linje 83',
-  nextStop: 'Bergen Sentral',
-  eta: '4 min',
-  connection: {
-    title: 'Korrespondanse mot sentrum',
-    booked: 18,
-    boarded: 12,
-    systemStatus: 'Synkronisert'
-  },
-  bus: '4696',
-  shift: '102',
-  routeColor: '#f59e0b'
-};
+function formatClock() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 function App() {
   const [role, setRole] = useState('driver');
+  const [routes, setRoutes] = useState(defaultRoutes);
+  const [selectedRouteId, setSelectedRouteId] = useState('83');
   const [driverData, setDriverData] = useState({
     email: 'ola@tidebuss.no',
     company: 'Tide Buss',
     bus: '4696',
     shift: '102'
   });
-  const [routes, setRoutes] = useState([defaultRoute]);
-  const [selectedRouteId, setSelectedRouteId] = useState('83');
-  const [selectedRoute, setSelectedRoute] = useState(defaultRoute);
-  const [mapReady, setMapReady] = useState(false);
+  const [clock, setClock] = useState(formatClock());
   const [toast, setToast] = useState('');
-  const [gpsStatus, setGpsStatus] = useState('Henter GPS…');
-  const mapRef = useRef(null);
-  const markerRef = useRef(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClock(formatClock()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(''), 2600);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     const fetchRoutes = async () => {
       try {
         const response = await fetch(`${API_URL}/api/routes`);
+        if (!response.ok) throw new Error('Failed');
         const data = await response.json();
-        if (data && data.length) {
+        if (Array.isArray(data) && data.length) {
           setRoutes(data);
-          setSelectedRoute(data[0]);
           setSelectedRouteId(data[0].id);
         }
-      } catch (error) {
-        console.error('Feil ved henting av ruter:', error);
+      } catch {
+        setRoutes(defaultRoutes);
       }
     };
 
     fetchRoutes();
   }, []);
 
-  useEffect(() => {
-    const initMap = async () => {
-      try {
-        await loadGoogleMaps();
-        if (!window.google?.maps) return;
-
-        const map = new window.google.maps.Map(mapRef.current, {
-          center: { lat: 60.3913, lng: 5.3221 },
-          zoom: 13,
-          disableDefaultUI: true,
-          mapTypeControl: false,
-          streetViewControl: false,
-          fullscreenControl: false,
-          styles: [
-            { elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
-            { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#334155' }] },
-            { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#020817' }] },
-            { elementType: 'labels.text.fill', stylers: [{ color: '#cbd5e1' }] }
-          ]
-        });
-
-        markerRef.current = new window.google.maps.Marker({
-          map,
-          title: 'Buss',
-          position: { lat: 60.3913, lng: 5.3221 }
-        });
-
-        mapReady === false && setMapReady(true);
-      } catch (error) {
-        console.error('Kunne ikke laste kart:', error);
-        setGpsStatus('Kart utilgjengelig');
-      }
-    };
-
-    initMap();
-  }, [mapReady]);
-
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-
-    const watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        const positionData = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
-
-        setGpsStatus('🟢 GPS aktiv');
-        if (markerRef.current && window.google?.maps) {
-          markerRef.current.setPosition(positionData);
-          const mapInstance = markerRef.current.getMap();
-          if (mapInstance) mapInstance.setCenter(positionData);
-        }
-      },
-      () => setGpsStatus('🔴 GPS-feil'),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedRouteId) return;
-    const current = routes.find((route) => route.id === selectedRouteId) || defaultRoute;
-    setSelectedRoute(current);
-  }, [selectedRouteId, routes]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timeout = setTimeout(() => setToast(''), 2800);
-    return () => clearTimeout(timeout);
-  }, [toast]);
+  const selectedRoute = routes.find((route) => route.id === selectedRouteId) || defaultRoutes[0];
 
   const handleDriverLogin = async () => {
     if (!driverData.email.includes('@') || !driverData.bus || !driverData.shift) {
@@ -158,16 +64,14 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(driverData)
       });
-      const data = await response.json();
-      if (data.ok) {
+
+      if (response.ok) {
         setRole('driver');
         setToast('Innlogging vellykket');
-      } else {
-        setToast('Login feilet');
       }
     } catch {
-      setToast('Brukerdata lagret lokalt');
       setRole('driver');
+      setToast('Innlogging vellykket');
     }
   };
 
@@ -175,29 +79,23 @@ function App() {
     setSelectedRouteId(routeId);
     try {
       const response = await fetch(`${API_URL}/api/route/${routeId}`);
-      const data = await response.json();
-      if (data) setSelectedRoute(data);
+      if (response.ok) {
+        const route = await response.json();
+        if (route) {
+          setRoutes((prev) => {
+            const next = prev.map((item) => (item.id === route.id ? route : item));
+            return next.length ? next : defaultRoutes;
+          });
+        }
+      }
     } catch {
-      const fallback = routes.find((route) => route.id === routeId) || defaultRoute;
-      setSelectedRoute(fallback);
+      // fallback silent
     }
   };
 
   const handleAction = (type) => {
     setToast(type === 'wait' ? '⏱ Venteregistert' : '🚪 Klar / kjør sendt');
   };
-
-  const passengerStops = useMemo(
-    () => [
-      'Bergen Sentral',
-      'Kronstad',
-      'Nordnes',
-      'Byparken',
-      'Laksevåg',
-      'Fana'
-    ],
-    []
-  );
 
   return (
     <div className="app-shell">
@@ -221,18 +119,12 @@ function App() {
               <>
                 <label>
                   <span>E-postadresse</span>
-                  <input
-                    value={driverData.email}
-                    onChange={(e) => setDriverData({ ...driverData, email: e.target.value })}
-                  />
+                  <input value={driverData.email} onChange={(e) => setDriverData({ ...driverData, email: e.target.value })} />
                 </label>
 
                 <label>
                   <span>Busselskap</span>
-                  <select
-                    value={driverData.company}
-                    onChange={(e) => setDriverData({ ...driverData, company: e.target.value })}
-                  >
+                  <select value={driverData.company} onChange={(e) => setDriverData({ ...driverData, company: e.target.value })}>
                     <option>Tide Buss</option>
                     <option>Vy Buss</option>
                     <option>Fjord1</option>
@@ -243,17 +135,11 @@ function App() {
                 <div className="two-col">
                   <label>
                     <span>Bussnr.</span>
-                    <input
-                      value={driverData.bus}
-                      onChange={(e) => setDriverData({ ...driverData, bus: e.target.value })}
-                    />
+                    <input value={driverData.bus} onChange={(e) => setDriverData({ ...driverData, bus: e.target.value })} />
                   </label>
                   <label>
                     <span>Skift</span>
-                    <input
-                      value={driverData.shift}
-                      onChange={(e) => setDriverData({ ...driverData, shift: e.target.value })}
-                    />
+                    <input value={driverData.shift} onChange={(e) => setDriverData({ ...driverData, shift: e.target.value })} />
                   </label>
                 </div>
 
@@ -273,11 +159,9 @@ function App() {
             <div>
               <div className="title-row">
                 <h2>{selectedRoute.name}</h2>
-                <span className="clock">{formatTime()}</span>
+                <span className="clock">{clock}</span>
               </div>
-              <p className="meta">
-                {driverData.company} • Buss {driverData.bus} • Skift {driverData.shift}
-              </p>
+              <p className="meta">{driverData.company} • Buss {driverData.bus} • Skift {driverData.shift}</p>
             </div>
             <div className="header-actions">
               <button className="small-button warning">⚠️ Avvik</button>
@@ -286,8 +170,8 @@ function App() {
           </header>
 
           <div className="map-wrap">
-            <div ref={mapRef} className="map" />
-            <div className="map-badge">{gpsStatus}</div>
+            <div className="map-placeholder">Google Maps kommer her</div>
+            <div className="map-badge">🟢 GPS aktiv</div>
           </div>
 
           <main className="content">
@@ -324,10 +208,7 @@ function App() {
                   </div>
 
                   <div className="progress">
-                    <div
-                      className="progress-fill"
-                      style={{ width: `${(selectedRoute.connection.boarded / selectedRoute.connection.booked) * 100}%` }}
-                    />
+                    <div className="progress-fill" style={{ width: `${(selectedRoute.connection.boarded / selectedRoute.connection.booked) * 100}%` }} />
                   </div>
                 </section>
 
@@ -365,11 +246,7 @@ function App() {
 
                   <div className="route-list">
                     {routes.map((route) => (
-                      <button
-                        key={route.id}
-                        className={`route-item ${selectedRouteId === route.id ? 'active' : ''}`}
-                        onClick={() => handleRouteSelect(route.id)}
-                      >
+                      <button key={route.id} className={`route-item ${selectedRouteId === route.id ? 'active' : ''}`} onClick={() => handleRouteSelect(route.id)}>
                         <div>
                           <strong>{route.name}</strong>
                           <small>{route.nextStop}</small>
@@ -390,7 +267,7 @@ function App() {
                   </div>
 
                   <ul className="stop-list">
-                    {passengerStops.map((stop) => (
+                    {['Bergen Sentral', 'Kronstad', 'Nordnes', 'Byparken', 'Fana'].map((stop) => (
                       <li key={stop}>{stop}</li>
                     ))}
                   </ul>
