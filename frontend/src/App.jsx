@@ -1,28 +1,60 @@
 import React from 'react';
-import { useState, useEffect } from 'react';
-import { defaultRoutes } from './data/mockRoutes';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-function formatClock() {
-  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
+const formatTime = (date = new Date()) =>
+  date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const defaultRoute = {
+  id: '83',
+  name: 'Linje 83',
+  nextStop: 'Bergen Sentral',
+  eta: '4 min',
+  connection: {
+    title: 'Korrespondanse mot sentrum',
+    booked: 18,
+    boarded: 12,
+    systemStatus: 'Synkronisert'
+  },
+  bus: '4696',
+  shift: '102',
+  routeColor: '#f59e0b'
+};
+
+const loadGoogleMaps = async () => {
+  if (window.google?.maps) return;
+
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY || 'YOUR_API_KEY';
+  if (apiKey === 'YOUR_API_KEY') return;
+
+  const script = document.createElement('script');
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+  script.async = true;
+  script.defer = true;
+  document.head.appendChild(script);
+
+  await new Promise((resolve) => {
+    script.onload = resolve;
+  });
+};
 
 function App() {
+  const [route, setRoute] = useState(defaultRoute);
   const [role, setRole] = useState('driver');
-  const [routes, setRoutes] = useState(defaultRoutes);
-  const [selectedRouteId, setSelectedRouteId] = useState('83');
   const [driverData, setDriverData] = useState({
     email: 'ola@tidebuss.no',
     company: 'Tide Buss',
     bus: '4696',
     shift: '102'
   });
-  const [clock, setClock] = useState(formatClock());
   const [toast, setToast] = useState('');
+  const [clock, setClock] = useState(formatTime());
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
 
   useEffect(() => {
-    const timer = setInterval(() => setClock(formatClock()), 1000);
+    const timer = setInterval(() => setClock(formatTime()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -33,24 +65,78 @@ function App() {
   }, [toast]);
 
   useEffect(() => {
-    const fetchRoutes = async () => {
+    const initMap = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/routes`);
-        if (!response.ok) throw new Error('Failed');
-        const data = await response.json();
-        if (Array.isArray(data) && data.length) {
-          setRoutes(data);
-          setSelectedRouteId(data[0].id);
-        }
-      } catch {
-        setRoutes(defaultRoutes);
+        await loadGoogleMaps();
+        if (!window.google?.maps || !mapRef.current) return;
+
+        const map = new window.google.maps.Map(mapRef.current, {
+          center: { lat: 60.3913, lng: 5.3221 },
+          zoom: 13,
+          disableDefaultUI: true,
+          streetViewControl: false,
+          mapTypeControl: false,
+          fullscreenControl: false,
+          styles: [
+            { elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
+            { elementType: 'labels.text.fill', stylers: [{ color: '#cbd5e1' }] },
+            { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#334155' }] },
+            { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#020817' }] }
+          ]
+        });
+
+        markerRef.current = new window.google.maps.Marker({
+          map,
+          position: { lat: 60.3913, lng: 5.3221 },
+          title: 'Buss',
+          label: { text: 'B', fontSize: '12px', fontWeight: '700', color: '#111827' }
+        });
+      } catch (error) {
+        console.error('Map load failed', error);
       }
     };
 
-    fetchRoutes();
+    initMap();
   }, []);
 
-  const selectedRoute = routes.find((route) => route.id === selectedRouteId) || defaultRoutes[0];
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const pos = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+
+        if (markerRef.current && window.google?.maps) {
+          markerRef.current.setPosition(pos);
+          const map = markerRef.current.getMap();
+          if (map) map.setCenter(pos);
+        }
+      },
+      () => setToast('GPS-feil: sjekk tillatelser'),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
+
+  useEffect(() => {
+    const fetchRoute = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/route/83`);
+        const data = await response.json();
+        if (data) setRoute(data);
+      } catch {
+        setRoute(defaultRoute);
+      }
+    };
+
+    fetchRoute();
+  }, []);
+
+  const passengerStops = useMemo(() => ['Bergen Sentral', 'Kronstad', 'Nordnes', 'Byparken', 'Fana'], []);
 
   const handleDriverLogin = async () => {
     if (!driverData.email.includes('@') || !driverData.bus || !driverData.shift) {
@@ -72,24 +158,6 @@ function App() {
     } catch {
       setRole('driver');
       setToast('Innlogging vellykket');
-    }
-  };
-
-  const handleRouteSelect = async (routeId) => {
-    setSelectedRouteId(routeId);
-    try {
-      const response = await fetch(`${API_URL}/api/route/${routeId}`);
-      if (response.ok) {
-        const route = await response.json();
-        if (route) {
-          setRoutes((prev) => {
-            const next = prev.map((item) => (item.id === route.id ? route : item));
-            return next.length ? next : defaultRoutes;
-          });
-        }
-      }
-    } catch {
-      // fallback silent
     }
   };
 
@@ -121,7 +189,6 @@ function App() {
                   <span>E-postadresse</span>
                   <input value={driverData.email} onChange={(e) => setDriverData({ ...driverData, email: e.target.value })} />
                 </label>
-
                 <label>
                   <span>Busselskap</span>
                   <select value={driverData.company} onChange={(e) => setDriverData({ ...driverData, company: e.target.value })}>
@@ -147,7 +214,7 @@ function App() {
               </>
             ) : (
               <div className="passenger-landing">
-                <p>Få sanntid for buss og tog i hele Norge.</p>
+                <p>Sanntid for buss og tog i hele Norge.</p>
                 <button className="primary-button" onClick={() => setRole('passenger')}>Fortsett som reisende</button>
               </div>
             )}
@@ -158,7 +225,7 @@ function App() {
           <header className="topbar">
             <div>
               <div className="title-row">
-                <h2>{selectedRoute.name}</h2>
+                <h2>{route.name}</h2>
                 <span className="clock">{clock}</span>
               </div>
               <p className="meta">{driverData.company} • Buss {driverData.bus} • Skift {driverData.shift}</p>
@@ -170,7 +237,7 @@ function App() {
           </header>
 
           <div className="map-wrap">
-            <div className="map-placeholder">Google Maps kommer her</div>
+            <div ref={mapRef} className="map" />
             <div className="map-badge">🟢 GPS aktiv</div>
           </div>
 
@@ -181,9 +248,9 @@ function App() {
                   <div className="panel-header">
                     <div>
                       <small>NESTE STOPP</small>
-                      <h3>{selectedRoute.nextStop}</h3>
+                      <h3>{route.nextStop}</h3>
                     </div>
-                    <span className="eta-badge">{selectedRoute.eta}</span>
+                    <span className="eta-badge">{route.eta}</span>
                   </div>
                 </section>
 
@@ -191,24 +258,24 @@ function App() {
                   <div className="panel-header">
                     <div>
                       <small>KORRESPONDANSE</small>
-                      <h4>{selectedRoute.connection.title}</h4>
+                      <h4>{route.connection.title}</h4>
                     </div>
-                    <span className="state success">{selectedRoute.connection.systemStatus}</span>
+                    <span className="state success">{route.connection.systemStatus}</span>
                   </div>
 
                   <div className="stats">
                     <div>
                       <span>Reisende med overgang</span>
-                      <strong>{selectedRoute.connection.booked}</strong>
+                      <strong>{route.connection.booked}</strong>
                     </div>
                     <div>
                       <span>Inn-/dørteller</span>
-                      <strong>{selectedRoute.connection.boarded} / {selectedRoute.connection.booked}</strong>
+                      <strong>{route.connection.boarded} / {route.connection.booked}</strong>
                     </div>
                   </div>
 
                   <div className="progress">
-                    <div className="progress-fill" style={{ width: `${(selectedRoute.connection.boarded / selectedRoute.connection.booked) * 100}%` }} />
+                    <div className="progress-fill" style={{ width: `${(route.connection.boarded / route.connection.booked) * 100}%` }} />
                   </div>
                 </section>
 
@@ -245,13 +312,13 @@ function App() {
                   </div>
 
                   <div className="route-list">
-                    {routes.map((route) => (
-                      <button key={route.id} className={`route-item ${selectedRouteId === route.id ? 'active' : ''}`} onClick={() => handleRouteSelect(route.id)}>
+                    {[route].map((item) => (
+                      <button key={item.id} className="route-item active" onClick={() => setRole('driver')}>
                         <div>
-                          <strong>{route.name}</strong>
-                          <small>{route.nextStop}</small>
+                          <strong>{item.name}</strong>
+                          <small>{item.nextStop}</small>
                         </div>
-                        <span>{route.eta}</span>
+                        <span>{item.eta}</span>
                       </button>
                     ))}
                   </div>
@@ -267,7 +334,7 @@ function App() {
                   </div>
 
                   <ul className="stop-list">
-                    {['Bergen Sentral', 'Kronstad', 'Nordnes', 'Byparken', 'Fana'].map((stop) => (
+                    {passengerStops.map((stop) => (
                       <li key={stop}>{stop}</li>
                     ))}
                   </ul>
